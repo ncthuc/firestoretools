@@ -21,8 +21,6 @@ collection_folder_suffix = '_collections'
 def cli():
     """Firetore CLI tools by Thuc Nguyen (https://github.com/thucnc)
 
-     Example:
-         $ firestoretools read -c credentials.json -o data -t collection -l -1 -e schools/dev /
     """
     click.echo("Firestore Tools by Thuc Nguyen (https://github.com/ncthuc)")
 
@@ -201,6 +199,9 @@ def read(cred, output, depth, type, exclude, path):
     """
     Read data (document / collection) from Firestore recursively and save to local file system
 
+    Example:
+
+    $ firestoretools read -c credentials.json -o data -t collection -l -1 -e schools/dev /
     \b
     :param cred:
     :param output:
@@ -327,8 +328,6 @@ def write(cred, folder, depth, path):
         click.echo('\nError: data folder "%s" is empty' % data_folder)
         return
 
-    files = [f for f in os.listdir() if os.path.isfile(f)]
-
     global total_doc_count
     global start_time
     total_doc_count = 0
@@ -389,8 +388,8 @@ def write_recursively(fs, data_folder, path, l, max_depth):
                 click.echo(click.style("Invalid folders detected: `%s`, skipping..." \
                                        % os.path.join(data_folder, folder), fg='red', bold=True))
                 continue
-
-            write_recursively(fs, os.path.join(data_folder, folder), doc_path, l + 1, max_depth)
+            collection_path = path + '/' + folder[:-len(collection_folder_suffix)]
+            write_recursively(fs, os.path.join(data_folder, folder), collection_path, l + 1, max_depth)
 
 
 if __name__ == '__main__':
