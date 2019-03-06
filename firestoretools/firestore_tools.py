@@ -14,6 +14,8 @@ all_colors = 'black', 'red', 'green', 'yellow', 'blue', 'magenta', \
              'bright_green', 'bright_yellow', 'bright_blue', \
              'bright_magenta', 'bright_cyan', 'bright_white'
 
+collection_folder_suffix = '_collections'
+
 
 @click.group()
 def cli():
@@ -178,7 +180,7 @@ start_time = 0
 
 
 def need_exclude(path, exclude_pattern):
-    path = path.replace('_collections/', '/')
+    path = path.replace('%s/' % collection_folder_suffix, '/')
     return re.match(exclude_pattern, path) is not None
 
 
@@ -252,6 +254,7 @@ def read_document(output, path, doc, l, max_depth, exclude):
         return
     global total_doc_count
     if l > max_depth:
+        click.echo(click.style("Max depth reached, returning...", fg='red', bold=True))
         return
     print('### Reading document (depth=%s):' % l, path)
     # print("doc #%s:" % doc.id, len(doc.to_dict()))
@@ -267,7 +270,7 @@ def read_document(output, path, doc, l, max_depth, exclude):
         click.echo(click.style("Elapsed time: %s..." % str(timedelta(seconds=(time.time()-start_time))), fg='yellow', bold=True))
 
     for col in doc.reference.collections():
-        read_collection(output, path + '_collections/' + col.id, col, l+1, max_depth, exclude)
+        read_collection(output, path + '%s/' % collection_folder_suffix + col.id, col, l+1, max_depth, exclude)
 
 
 def read_collection(output, path, colection, l, max_depth, exclude):
@@ -275,6 +278,7 @@ def read_collection(output, path, colection, l, max_depth, exclude):
         click.echo(click.style("Excluded collection '%s'." % path, fg='red', bold=True))
         return
     if l > max_depth:
+        click.echo(click.style("Max depth reached, returning...", fg='red', bold=True))
         return
     print('### Reading collection: (depth=%s)' % l, path)
     folder = os.path.join(output, path.replace('/', os.path.sep))
@@ -286,10 +290,107 @@ def read_collection(output, path, colection, l, max_depth, exclude):
 
 
 @cli.command()
-@click.option('--cred', default='credential.json', help='Firetore credential JSON file')
-@click.option('--data', default='', help='Data to write to Firestore')
-def write(cred, data):
-    click.echo('Dropped the database')
+@click.option('-c', '--cred', default='credential.json',
+              type=click.Path(exists=True, readable=True, dir_okay=False),
+              prompt='JSON credential file',
+              help='Path to Firestore credential (json) file')
+@click.option('-f', '--folder', default='data',
+              type=click.Path(exists=True, readable=True, file_okay=False, writable=True),
+              prompt='Input folder to read data', help='Source folder')
+@click.option('-l', '--depth', default=1, help='Recursion maximum depth level , -1 for infinite recursion')
+@click.argument('path', metavar='{path to document/collection in firestore}')
+def write(cred, folder, depth, path):
+    """
+    Read data (document / collection) from local folder and write to Firestore recursively
+
+    \b
+    :param cred:
+    :param folder:
+    :param depth:
+    :param path:
+    :return:
+    """
+    click.echo('Writing to Firetore, credential file: %s' % (cred))
+    cred = os.path.abspath(cred)
+    data_folder = os.path.abspath(folder)
+    click.echo('Document path: %s' % path)
+    click.echo('Data folder path: %s' % data_folder)
+
+    if depth < 0:
+        depth = 1000000
+
+    if path and path.startswith('/'):
+        path = path[1:]
+
+    allfiles = os.listdir(data_folder)
+    if not allfiles:
+        click.echo('\nError: data folder "%s" is empty' % data_folder)
+        return
+
+    files = [f for f in os.listdir() if os.path.isfile(f)]
+
+    global total_doc_count
+    global start_time
+    total_doc_count = 0
+    start_time = time.time()
+    fs = firestore.client(initialize_app(credentials.Certificate(cred)))
+
+    write_recursively(fs, data_folder, path, 1, depth)
+
+
+def write_recursively(fs, data_folder, path, l, max_depth):
+    files_and_folders = os.listdir(data_folder)
+    if not files_and_folders:
+        click.echo('\nData folder "%s" is empty, skipping...' % data_folder)
+        return
+
+    if l > max_depth:
+        click.echo(click.style("Max depth reached, returning...", fg='red', bold=True))
+        return
+
+    print('### Scanning folder (depth=%s):' % l, data_folder)
+
+    files = [f for f in files_and_folders if os.path.isfile(os.path.join(data_folder, f))]
+    folders = [f for f in files_and_folders if os.path.isdir(os.path.join(data_folder, f))]
+    # print('files & folders:', files_and_folders)
+    # print('files:', files)
+    # print('folders:', folders)
+
+    if not files:
+        # list of collections only
+        click.echo('Collections detected in `%s`' % data_folder)
+        for folder in folders:
+            collection_path = path + '/' + folder if path else folder
+            # click.echo('Creating collection `%s`' % collection_path)
+            # fs.collection(p)
+            write_recursively(fs, os.path.join(data_folder, folder), collection_path, l+1, max_depth)
+    else:
+        # list of documents
+        click.echo('Documents detected in `%s`' % data_folder)
+
+        for f in files:
+            with open(os.path.join(data_folder, f)) as fi:
+                doc_path = path + '/' + f
+                click.echo('Writing document `%s`' % doc_path)
+                doc = json.load(fi)
+                fs.document(doc_path).set(doc)
+
+                global total_doc_count
+                global start_time
+                total_doc_count += 1
+                if total_doc_count % 10 == 0:
+                    click.echo(click.style("Total documents written: %d..." % total_doc_count, fg='green', bold=True))
+                    click.echo(click.style("Elapsed time: %s..." % str(timedelta(seconds=(time.time() - start_time))),
+                                           fg='yellow', bold=True))
+                # print(json.dumps(doc))
+
+        for folder in folders:
+            if not folder.endswith(collection_folder_suffix) or not folder[:-len(collection_folder_suffix)] in files:
+                click.echo(click.style("Invalid folders detected: `%s`, skipping..." \
+                                       % os.path.join(data_folder, folder), fg='red', bold=True))
+                continue
+
+            write_recursively(fs, os.path.join(data_folder, folder), doc_path, l + 1, max_depth)
 
 
 if __name__ == '__main__':
