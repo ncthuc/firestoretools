@@ -178,6 +178,8 @@ start_time = 0
 
 
 def need_exclude(path, exclude_pattern):
+    if not exclude_pattern:
+        return None
     path = path.replace('%s/' % collection_folder_suffix, '/')
     return re.match(exclude_pattern, path) is not None
 
